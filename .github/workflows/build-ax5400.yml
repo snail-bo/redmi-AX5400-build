@@ -1,0 +1,162 @@
+name: Build X-WRT Redmi AX5400 + PassWall
+
+# 触发方式：
+#   1) 手动：Actions 页面 -> Run workflow
+#   2) 定时：打开下面 schedule 注释即可每周五 UTC 08:00 自动编译
+on:
+  workflow_dispatch:
+    inputs:
+      xwrt_branch:
+        description: 'x-wrt 源码分支或标签'
+        required: false
+        default: 'master'
+      keep_cores:
+        description: '保留的代理内核（xray / singbox / both）'
+        required: false
+        default: 'both'
+      upload_release:
+        description: '编译完成后发布到 GitHub Release'
+        required: false
+        default: false
+        type: boolean
+  # schedule:
+  #   - cron: '0 8 * * 5'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 350
+
+    env:
+      XWRT_BRANCH: ${{ github.event.inputs.xwrt_branch || 'master' }}
+      KEEP_CORES: ${{ github.event.inputs.keep_cores || 'both' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: 清理磁盘空间
+        run: |
+          docker rmi $(docker images -q) 2>/dev/null || true
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          sudo apt-get clean
+          df -h .
+
+      - name: 安装编译依赖
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential clang flex bison g++ gawk gcc-multilib g++-multilib \
+            gettext git libncurses-dev libssl-dev python3 python3-setuptools rsync \
+            swig unzip zlib1g-dev file wget curl ccache qemu-utils \
+            libelf-dev ecj fastjar java-properties-common
+          sudo apt-get clean
+
+      - name: 恢复 ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: ccache-ipq50xx-${{ github.run_id }}
+          restore-keys: |
+            ccache-ipq50xx-
+
+      - name: 拉取 x-wrt 源码
+        run: git clone --depth 1 -b "$XWRT_BRANCH" https://github.com/x-wrt/x-wrt.git x-wrt
+
+      - name: 加入 PassWall 源
+        run: |
+          cd x-wrt
+          # 注意：xiaorouji 旧地址已失效，官方现址为 Openwrt-Passwall 组织
+          cat >> feeds.conf.default <<'EOF'
+          src-git passwall_packages https://github.com/Openwrt-Passwall/openwrt-passwall-packages.git;main
+          src-git passwall_luci https://github.com/Openwrt-Passwall/openwrt-passwall.git;main
+          EOF
+
+      - name: 更新并安装 feeds
+        run: |
+          cd x-wrt
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+          # 移除与 passwall-packages 重名的官方版本，避免版本冲突
+          rm -rf feeds/packages/net/xray-core \
+                 feeds/packages/net/sing-box \
+                 feeds/packages/net/v2ray-geodata
+          rm -rf feeds/luci/applications/luci-app-passwall
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a -p passwall_packages
+          ./scripts/feeds install -a -p passwall_luci
+
+      - name: 生成 .config
+        run: |
+          cd x-wrt
+          # 官方 ipq50xx 配置模板（x feed: com.x-wrt/rom/lede/config.qualcommax-ipq50xx）
+          cp feeds/x/rom/lede/config.qualcommax-ipq50xx .config
+
+          # 只编译 Xiaomi Redmi AX5400 一台设备，缩短编译时间
+          sed -i 's/^CONFIG_TARGET_MULTI_PROFILE=y/# CONFIG_TARGET_MULTI_PROFILE is not set/' .config
+          sed -i 's/^CONFIG_TARGET_PER_DEVICE_ROOTFS=y/# CONFIG_TARGET_PER_DEVICE_ROOTFS is not set/' .config
+          echo 'CONFIG_TARGET_qualcommax_ipq50xx_DEVICE_xiaomi_redmi-ax5400=y' >> .config
+
+          cat "$GITHUB_WORKSPACE/passwall.config" >> .config
+
+          # 二选一内核裁剪（先删掉 =y 行，再写 is not set，避免被覆盖）
+          if [ "$KEEP_CORES" = "xray" ]; then
+            sed -i '/INCLUDE_SingBox/d' .config
+            echo '# CONFIG_PACKAGE_luci-app-passwall_INCLUDE_SingBox is not set' >> .config
+          elif [ "$KEEP_CORES" = "singbox" ]; then
+            sed -i '/INCLUDE_Xray/d' .config
+            echo '# CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Xray is not set' >> .config
+          fi
+
+          echo 'CONFIG_CCACHE=y' >> .config
+          make defconfig
+          ./scripts/diffconfig.sh > ../config.seed
+
+      - name: 下载依赖源码
+        run: cd x-wrt && make download -j8
+
+      - name: 编译固件
+        run: |
+          cd x-wrt
+          make -j$(nproc) || make -j1 V=s
+
+      - name: 整理产物
+        if: always()
+        run: |
+          mkdir -p out
+          cp x-wrt/.config out/config.build 2>/dev/null || true
+          cp config.seed out/ 2>/dev/null || true
+          find x-wrt/bin/targets -type f \( -name '*redmi-ax5400*' -o -name 'sha256sums' \) -exec cp {} out/ \; || true
+          ls -lh out
+
+      - name: 上传失败日志
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: x-wrt/logs
+
+      - name: 上传固件
+        uses: actions/upload-artifact@v4
+        with:
+          name: x-wrt-ax5400-passwall
+          path: out/*
+          if-no-files-found: warn
+
+      - name: 发布到 GitHub Release
+        if: success() && github.event.inputs.upload_release == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ax5400-${{ github.run_number }}
+          name: X-WRT Redmi AX5400 + PassWall #${{ github.run_number }}
+          body: |
+            自动编译产物（qualcommax/ipq50xx - Xiaomi Redmi AX5400）
+            - x-wrt 分支：${{ github.event.inputs.xwrt_branch || 'master' }}
+            - 代理内核：${{ github.event.inputs.keep_cores || 'both' }}
+            刷机：先刷 initramfs-factory.ubi 过渡，再 sysupgrade 固化。
+          files: out/*
