@@ -26,18 +26,35 @@ X-WRT 官方自己的发布流水线就是这套逻辑（仓库 `x-wrt/build-rel
 
 ### 步骤
 
-1. 新建 GitHub 仓库（例如 `my-xwrt-ax5400`），把本目录的 4 个文件全部放进去：
+1. 本目录已经初始化为 git 仓库（main 分支）。推到你自己的 GitHub：
+
+   ```bash
+   gh auth login                                            # 首次需要先登录
+   gh repo create my-xwrt-ax5400 --public --source=. --push # 建仓库并推送
+   ```
+
+   或手动在 GitHub 建空仓库后：
+
+   ```bash
+   git remote add origin git@github.com:<你的账号>/my-xwrt-ax5400.git
+   git push -u origin main
+   ```
+
+   目录内容：
 
    ```
-   .github/workflows/build-ax5400.yml
-   passwall.config
-   build.sh
+   .github/workflows/build-ax5400.yml   编译流水线
+   .gitattributes                       强制 LF
+   .gitignore                           忽略 out/ 与源码目录
+   passwall.config                      PassWall 配置片段
+   build.sh                             本地一键编译
    README.md
    ```
 
 2. Actions 页面 → **Build X-WRT Redmi AX5400 + PassWall** → **Run workflow**
    - `xwrt_branch`：默认 `master`（想要固定版本就填 tag/分支名）
    - `keep_cores`：`both` / `xray` / `singbox`（只留一个内核能省不少编译时间和体积）
+   - `upload_release`：勾上会把产物打包发布到 GitHub Release（tag 为 `ax5400-<run_number>`），不勾就只放在 Artifacts
 
 3. 等约 **1.5–3 小时**（IPQ50xx 单设备 + host golang 编译），在 Artifacts 里下载 `x-wrt-ax5400-passwall`，里面有：
 
@@ -147,10 +164,11 @@ x-wrt 用 firewall4（nftables），所以 `Iptables_Transparent_Proxy` 必须�
 
 | 文件 | 作用 |
 |---|---|
-| `.github/workflows/build-ax5400.yml` | GitHub Actions 全自动编译 + 上传产物 |
+| `.github/workflows/build-ax5400.yml` | GitHub Actions 全自动编译 + 上传产物 + 可选 Release |
 | `passwall.config` | 追加到官方 ipq50xx 模板上的 PassWall 配置项 |
 | `build.sh` | 本地 / WSL2 一键编译脚本 |
-| `out/` | 编译产物输出目录（脚本自动创建） |
+| `.gitattributes` | 强制 LF，避免 Windows 检出后 shell 脚本被 `\r` 搞坏 |
+| `out/` | 编译产物输出目录（脚本自动创建，已 gitignore） |
 
 ---
 
