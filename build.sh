@@ -13,6 +13,7 @@ XWRT_BRANCH=${XWRT_BRANCH:-master}
 JOBS=${JOBS:-$(nproc)}
 WORK=${WORK:-$HOME/x-wrt-build}
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
+DEVICE_DIR="$SCRIPT_DIR/qualcommax/ipq50xx/xiaomi_redmi-ax5400"
 
 echo "==> 目标：qualcommax/ipq50xx  xiaomi_redmi-ax5400"
 echo "==> 源码分支：$XWRT_BRANCH   工作目录：$WORK   并行：$JOBS"
@@ -35,23 +36,11 @@ if [ ! -d "$WORK/x-wrt" ]; then
 fi
 cd "$WORK/x-wrt"
 
-# ---------- 3. PassWall 源 ----------
-if ! grep -q passwall_packages feeds.conf.default; then
-  cat >> feeds.conf.default <<'EOF'
-src-git passwall_packages https://github.com/Openwrt-Passwall/openwrt-passwall-packages.git;main
-src-git passwall_luci https://github.com/Openwrt-Passwall/openwrt-passwall.git;main
-EOF
-fi
-
-# ---------- 4. feeds ----------
+# ---------- 3. feeds（PassWall 源与冲突包处理都在 diy.sh 里）----------
+./scripts/feeds update -a
+"$DEVICE_DIR/diy/diy.sh"
 ./scripts/feeds update -a
 ./scripts/feeds install -a
-# 移除与 passwall-packages 重名的包，避免版本冲突
-rm -rf feeds/packages/net/xray-core feeds/packages/net/sing-box feeds/packages/net/v2ray-geodata
-rm -rf feeds/luci/applications/luci-app-passwall
-./scripts/feeds update -a
-./scripts/feeds install -a -p passwall_packages
-./scripts/feeds install -a -p passwall_luci
 
 # ---------- 5. .config ----------
 cp feeds/x/rom/lede/config.qualcommax-ipq50xx .config
@@ -59,7 +48,7 @@ cp feeds/x/rom/lede/config.qualcommax-ipq50xx .config
 sed -i 's/^CONFIG_TARGET_MULTI_PROFILE=y/# CONFIG_TARGET_MULTI_PROFILE is not set/' .config
 sed -i 's/^CONFIG_TARGET_PER_DEVICE_ROOTFS=y/# CONFIG_TARGET_PER_DEVICE_ROOTFS is not set/' .config
 echo 'CONFIG_TARGET_qualcommax_ipq50xx_DEVICE_xiaomi_redmi-ax5400=y' >> .config
-cat "$SCRIPT_DIR/passwall.config" >> .config
+cat "$DEVICE_DIR/passwall.config" >> .config
 echo 'CONFIG_CCACHE=y' >> .config
 make defconfig
 
