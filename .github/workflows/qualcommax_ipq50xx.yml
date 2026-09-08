@@ -90,13 +90,20 @@ jobs:
         cd openwrt
         ./scripts/feeds update -a
         $GITHUB_WORKSPACE/$DEVICE_PATH/diy/diy.sh
-        # 只拉取刚加入的 PassWall feeds；再次 update -a 会恢复 diy.sh 删除的冲突包。
+        # 只拉取 diy.sh 刚置顶的 PassWall feeds（官方 feeds 上一步已 update 完）
         ./scripts/feeds update passwall_packages passwall_luci
         ./scripts/feeds install -a
-        test "$(readlink package/feeds/passwall_luci/luci-app-passwall)" = "../../../feeds/passwall_luci/luci-app-passwall"
-        for package in xray-core sing-box v2ray-geodata; do
+        # 校验：PassWall 相关包必须真正落在 passwall_* 目录下，且没有悬空链接
+        luci_link="package/feeds/passwall_luci/luci-app-passwall"
+        test -L "$luci_link" || { echo "luci-app-passwall 未从 passwall_luci 安装" >&2; exit 1; }
+        test "$(readlink "$luci_link")" = "../../../feeds/passwall_luci/luci-app-passwall"
+        test -e "$luci_link" || { echo "luci-app-passwall 是悬空符号链接" >&2; exit 1; }
+        for package in xray-core sing-box v2ray-geodata chinadns-ng geoview; do
           target="package/feeds/passwall_packages/$package"
           test -L "$target" || { echo "$package 未从 passwall_packages 安装" >&2; exit 1; }
+          test -e "$target" || { echo "$package 是悬空符号链接" >&2; exit 1; }
+          test ! -e "package/feeds/packages/$package" || {
+            echo "$package 被官方 packages feed 抢占" >&2; ls -l "package/feeds/packages/$package" >&2; exit 1; }
         done
 
     - name: Load AX5400 custom config

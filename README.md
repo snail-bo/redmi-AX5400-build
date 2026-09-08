@@ -19,7 +19,7 @@ X-WRT 固件自动编译流水线。当前机型：**Xiaomi Redmi AX5400**（`qu
 ```
 .github/workflows/qualcommax_ipq50xx.yml   编译流水线
 qualcommax/ipq50xx/xiaomi_redmi-ax5400/
-├── diy/diy.sh        接入 PassWall 源 + 移除冲突包
+├── diy/diy.sh        接入 PassWall 源（置顶以保证同名包优先）
 └── passwall.config   追加到官方模板的配置项
 build.sh              本地 / WSL2 一键编译
 ```
@@ -65,7 +65,8 @@ XWRT_REF=<commit-or-tag> JOBS=8 ./build.sh
 
 1. **仓库地址已迁移**：`xiaorouji/openwrt-passwall` 已 404，现址为
    `Openwrt-Passwall/openwrt-passwall` + `Openwrt-Passwall/openwrt-passwall-packages`（main 分支）
-2. **冲突处理**：x-wrt packages feed 自带 `xray-core`、`sing-box`、`v2ray-geodata`，与 passwall-packages 同名，必须先删（已在 `diy.sh` 里做）。`chinadns-ng`、`geoview` 官方 feed 没有，只能由 passwall-packages 提供
+2. **同名包靠"排在最前面"抢占，不靠删文件**：x-wrt packages feed 自带 `xray-core`、`sing-box`、`v2ray-geodata` 和 passwall-packages 同名。`scripts/feeds` 的 install 是先到先得——`lookup_src()` 按 `feeds.conf.default` 顺序取第一个含该包的 feed，随后用全局 `%installed` 标记，后面的同名包一律跳过。所以 `diy.sh` 把两个 PassWall 源插到文件**开头**。`chinadns-ng`、`geoview` 官方 feed 没有，只能由 passwall-packages 提供
+   - 不要用 `rm -rf feeds/packages/net/xray-core` 来解决：目录删了，`feeds/packages.index` 里的条目还在，install 只会建出一个悬空符号链接，问题更隐蔽
 3. **透明代理选 nftables**：x-wrt 用 firewall4，选 iptables 的话规则不生效
 4. **省时间**：官方模板默认 `CONFIG_TARGET_MULTI_PROFILE=y` 会编十几台设备，workflow 里已关掉并改成只编 AX5400
 5. **来源校验**：安装 feeds 后会检查 PassWall、Xray、SingBox 和 geodata 的符号链接来源；上游目录变化或同名包冲突会直接终止构建
@@ -94,7 +95,8 @@ XWRT_REF=<commit-or-tag> JOBS=8 ./build.sh
 | 现象 | 原因 / 处理 |
 |---|---|
 | feeds 找不到 passwall | 地址写成了已失效的 `xiaorouji/*` |
-| xray-core / sing-box 版本冲突 | 没删官方 feed 里的同名包，见 `diy.sh` |
+| `xray-core 未从 passwall_packages 安装` | PassWall 源没排在 `feeds.conf.default` 开头，同名包被官方 feed 抢走 |
+| `xx 是悬空符号链接` | 用 `rm -rf` 删过官方 feed 目录但没重建 index，改成置顶即可 |
 | 编译超时 | 已关 MULTI_PROFILE 只编一台；仍超时就把 `keep_cores` 设成单个 |
 | golang 编译失败 | 内存或磁盘不足，减 JOBS 或换更大机器 |
 | 刷完无线不工作 | 型号不对应，核对 RA74 |
