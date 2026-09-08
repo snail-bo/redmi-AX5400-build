@@ -5,25 +5,23 @@
 # 用法：
 #   ./build.sh                 # 全量编译
 #   ./build.sh menuconfig      # 先弹出菜单自己选包，再编译
-#   XWRT_BRANCH=master JOBS=8 ./build.sh
+#   XWRT_REF=<commit-or-tag> JOBS=8 ./build.sh
 # ---------------------------------------------------------------
-set -e
+set -euo pipefail
 
-XWRT_BRANCH=${XWRT_BRANCH:-master}
+XWRT_REF=${XWRT_REF:-1e5118167060b432564801453d5a8eb63015962e}
 JOBS=${JOBS:-$(nproc)}
 WORK=${WORK:-$HOME/x-wrt-build}
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 DEVICE_DIR="$SCRIPT_DIR/qualcommax/ipq50xx/xiaomi_redmi-ax5400"
 
 echo "==> 目标：qualcommax/ipq50xx  xiaomi_redmi-ax5400"
-echo "==> 源码分支：$XWRT_BRANCH   工作目录：$WORK   并行：$JOBS"
+echo "==> 源码版本：$XWRT_REF   工作目录：$WORK   并行：$JOBS"
 
 # ---------- 1. 依赖 ----------
 sudo apt-get update
-sudo apt-get install -y --no-install-recommends \
-  build-essential clang flex bison g++ gawk gcc-multilib g++-multilib \
-  gettext git libncurses-dev libssl-dev python3 python3-setuptools rsync \
-  swig unzip zlib1g-dev file wget curl ccache libelf-dev
+mapfile -t packages < "$SCRIPT_DIR/.github/openwrt-build-packages.txt"
+sudo apt-get install -y --no-install-recommends "${packages[@]}"
 
 export PATH="/usr/lib/ccache:$PATH"
 export CCACHE_DIR="$HOME/.ccache"
@@ -31,9 +29,13 @@ ccache -M 20G
 
 # ---------- 2. 源码 ----------
 mkdir -p "$WORK"
-if [ ! -d "$WORK/x-wrt" ]; then
-  git clone --depth 1 -b "$XWRT_BRANCH" https://github.com/x-wrt/x-wrt.git "$WORK/x-wrt"
+if [ ! -d "$WORK/x-wrt/.git" ]; then
+  git init "$WORK/x-wrt"
+  git -C "$WORK/x-wrt" remote add origin https://github.com/x-wrt/x-wrt.git
 fi
+git -C "$WORK/x-wrt" fetch --depth=1 origin "$XWRT_REF"
+# 如有未提交修改，checkout 会拒绝覆盖并安全退出。
+git -C "$WORK/x-wrt" checkout --detach FETCH_HEAD
 cd "$WORK/x-wrt"
 
 # ---------- 3. feeds（PassWall 源与冲突包处理都在 diy.sh 里）----------
@@ -41,6 +43,11 @@ cd "$WORK/x-wrt"
 "$DEVICE_DIR/diy/diy.sh"
 ./scripts/feeds update -a
 ./scripts/feeds install -a
+test "$(readlink package/feeds/passwall_luci/luci-app-passwall)" = "../../../feeds/passwall_luci/luci-app-passwall"
+for package in xray-core sing-box v2ray-geodata; do
+  target="package/feeds/passwall_packages/$package"
+  test -L "$target" || { echo "$package 未从 passwall_packages 安装" >&2; exit 1; }
+done
 
 # ---------- 5. .config ----------
 cp feeds/x/rom/lede/config.qualcommax-ipq50xx .config
@@ -52,7 +59,7 @@ cat "$DEVICE_DIR/passwall.config" >> .config
 echo 'CONFIG_CCACHE=y' >> .config
 make defconfig
 
-if [ "$1" = "menuconfig" ]; then
+if [ "${1:-}" = "menuconfig" ]; then
   make menuconfig
   ./scripts/diffconfig.sh > "$SCRIPT_DIR/config.seed"
 fi
@@ -63,7 +70,15 @@ make -j"$JOBS" || make -j1 V=s
 
 # ---------- 7. 产物 ----------
 mkdir -p "$SCRIPT_DIR/out"
+test -n "$(find bin/targets -type f -name '*initramfs-factory.ubi' -print -quit)" || { echo "缺少 initramfs-factory.ubi" >&2; exit 1; }
+test -n "$(find bin/targets -type f -name '*squashfs-sysupgrade.bin' -print -quit)" || { echo "缺少 squashfs-sysupgrade.bin" >&2; exit 1; }
 find bin/targets -type f -name '*redmi-ax5400*' -exec cp {} "$SCRIPT_DIR/out/" \;
 cp .config "$SCRIPT_DIR/out/config.build"
+{
+  printf 'x-wrt %s\n' "$(git rev-parse HEAD)"
+  for feed in feeds/*; do
+    test -d "$feed/.git" && printf '%s %s\n' "$(basename "$feed")" "$(git -C "$feed" rev-parse HEAD)"
+  done
+} > "$SCRIPT_DIR/out/source-versions.txt"
 ls -lh "$SCRIPT_DIR/out"
 echo "==> 完成：$SCRIPT_DIR/out"

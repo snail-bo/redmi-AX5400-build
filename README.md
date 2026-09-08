@@ -33,7 +33,9 @@ build.sh              本地 / WSL2 一键编译
 - Actions 页手动运行 **Build X-WRT for Redmi AX5400**，可选：
   - `ssh`：开 SSH 进 runner 调试
   - `keep_cores`：`both` / `xray` / `singbox`，只留一个内核能省编译时间和体积
-- 编译完成后发布到 Releases，tag 为 `x-wrt-ax5400_<日期>`，只保留最近 2 个
+- 编译完成后发布到 Releases，tag 为 `x-wrt-ax5400_<日期>_<运行序号>`，只保留最近 2 个
+- X-WRT、官方 feeds 与 PassWall 均固定到明确提交；升级时需在 workflow、`build.sh` 和 `diy.sh` 中显式更新提交号
+- Release 同时包含 `source-versions.txt`、`config.build` 和 SHA-256 校验文件，便于追踪构建来源
 
 首次使用前确认仓库 **Settings → Actions → General** 已允许运行工作流并开放读写权限（用于上传 Release）。
 
@@ -52,10 +54,12 @@ x-wrt-<ver>-qualcommax-ipq50xx-xiaomi_redmi-ax5400-squashfs-sysupgrade.bin 正�
 ```bash
 ./build.sh                  # 全量编译
 ./build.sh menuconfig       # 先自己勾包再编译
-XWRT_BRANCH=master JOBS=8 ./build.sh
+XWRT_REF=<commit-or-tag> JOBS=8 ./build.sh
 ```
 
 要求：Ubuntu 22.04/24.04、Debian 12 或 WSL2；**必须在 ext4 原生目录**（`~/`），不能在 `/mnt/c`；预留 40GB 磁盘。
+
+脚本默认使用与 Actions 相同的固定 X-WRT 提交。已有源码目录会先 fetch 并切换到指定提交；如果目录中存在会被覆盖的未提交修改，Git 会拒绝切换并让脚本安全退出。
 
 ## PassWall 接入要点
 
@@ -64,6 +68,16 @@ XWRT_BRANCH=master JOBS=8 ./build.sh
 2. **冲突处理**：x-wrt packages feed 自带 `xray-core`、`sing-box`、`v2ray-geodata`，与 passwall-packages 同名，必须先删（已在 `diy.sh` 里做）。`chinadns-ng`、`geoview` 官方 feed 没有，只能由 passwall-packages 提供
 3. **透明代理选 nftables**：x-wrt 用 firewall4，选 iptables 的话规则不生效
 4. **省时间**：官方模板默认 `CONFIG_TARGET_MULTI_PROFILE=y` 会编十几台设备，workflow 里已关掉并改成只编 AX5400
+5. **来源校验**：安装 feeds 后会检查 PassWall、Xray、SingBox 和 geodata 的符号链接来源；上游目录变化或同名包冲突会直接终止构建
+
+## 版本升级
+
+为了让发布的固件可复现、可审计，流水线不自动追踪上游分支。升级时：
+
+1. 更新 `.github/workflows/qualcommax_ipq50xx.yml` 和 `build.sh` 中的 `XWRT_REF`
+2. 更新 `diy.sh` 中 X-WRT 官方 feeds 和两个 PassWall feed 的提交号
+3. 手动运行一次 Actions，确认配置、编译及两个必需镜像的校验全部通过
+4. 检查 Release 内的 `source-versions.txt` 与预期提交一致
 
 ## 刷机
 

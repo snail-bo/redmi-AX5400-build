@@ -38,9 +38,9 @@ permissions:
   contents: write
 
 env:
-  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
   REPO_URL: https://github.com/x-wrt/x-wrt
-  REPO_BRANCH: master
+  # 固定源码提交，升级时显式修改，保证同一提交可复现和审计。
+  XWRT_REF: 1e5118167060b432564801453d5a8eb63015962e
   TZ: Asia/Shanghai
   DEVICE_PATH: qualcommax/ipq50xx/xiaomi_redmi-ax5400
 
@@ -51,14 +51,15 @@ jobs:
 
     steps:
     - name: Checkout
-      uses: actions/checkout@main
+      uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # main, 2026-07-20
 
     - name: Initialize environment
       env:
         DEBIAN_FRONTEND: noninteractive
       run: |
         sudo -E apt-get -qq update > /dev/null
-        sudo -E apt-get -qq install -y $(curl -fsSL https://raw.githubusercontent.com/nantayo/My-Pkg/master/openwrt) > /dev/null
+        mapfile -t packages < .github/openwrt-build-packages.txt
+        sudo -E apt-get -qq install -y "${packages[@]}" > /dev/null
         sudo -E apt-get -qq autoremove --purge > /dev/null
         sudo -E apt-get -qq clean > /dev/null
         sudo timedatectl set-timezone "$TZ"
@@ -68,9 +69,20 @@ jobs:
     - name: Clone source code
       working-directory: /workdir
       run: |
-        git clone $REPO_URL -b $REPO_BRANCH --single-branch --depth=1 openwrt
-        ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
-        echo "FILE_DATE=$(date +"%Y%m%d")" >> $GITHUB_ENV
+        git init openwrt
+        git -C openwrt remote add origin "$REPO_URL"
+        git -C openwrt fetch --depth=1 origin "$XWRT_REF"
+        git -C openwrt checkout --detach FETCH_HEAD
+        ln -s /workdir/openwrt "$GITHUB_WORKSPACE/openwrt"
+        echo "FILE_DATE=$(date +"%Y%m%d")" >> "$GITHUB_ENV"
+
+    - name: Restore compiler cache
+      uses: actions/cache@3edfce9056124e459a23f683a21433670d47daca # main, 2026-08-13
+      with:
+        path: ~/.ccache
+        key: ccache-${{ runner.os }}-ax5400-${{ env.XWRT_REF }}-${{ hashFiles('qualcommax/ipq50xx/xiaomi_redmi-ax5400/passwall.config') }}
+        restore-keys: |
+          ccache-${{ runner.os }}-ax5400-
 
     - name: Update & Install feeds
       run: |
@@ -80,6 +92,11 @@ jobs:
         $GITHUB_WORKSPACE/$DEVICE_PATH/diy/diy.sh
         ./scripts/feeds update -a
         ./scripts/feeds install -a
+        test "$(readlink package/feeds/passwall_luci/luci-app-passwall)" = "../../../feeds/passwall_luci/luci-app-passwall"
+        for package in xray-core sing-box v2ray-geodata; do
+          target="package/feeds/passwall_packages/$package"
+          test -L "$target" || { echo "$package 未从 passwall_packages 安装" >&2; exit 1; }
+        done
 
     - name: Load AX5400 custom config
       run: |
@@ -103,7 +120,7 @@ jobs:
         make defconfig
 
     - name: SSH connect to Actions
-      uses: P3TERX/ssh2actions@main
+      uses: P3TERX/ssh2actions@71006b93bff498b020448ac10964f8a5d0f9f32c # main, 2020-09-12
       if: github.event.inputs.ssh == 'true'
 
     - name: Download package
@@ -114,23 +131,36 @@ jobs:
 
     - name: Compile firmware
       run: |
-        chmod -R 755 openwrt
         cd openwrt
         echo -e "$(nproc) thread compile"
         make -j$(( $(nproc) + 1 )) || make -j1 V=s
 
     - name: Package firmware
       run: |
-        mkdir -p $GITHUB_WORKSPACE/out
+        set -euo pipefail
+        mkdir -p "$GITHUB_WORKSPACE/out"
         cd openwrt/bin/targets/qualcommax/ipq50xx
-        cp *redmi-ax5400*.ubi *redmi-ax5400*.bin $GITHUB_WORKSPACE/out/ 2>/dev/null || true
-        cd $GITHUB_WORKSPACE/out && sha256sum * > sha256sums.txt
+        initramfs=( *redmi-ax5400*initramfs-factory.ubi )
+        sysupgrade=( *redmi-ax5400*squashfs-sysupgrade.bin )
+        test -e "${initramfs[0]}" || { echo "缺少 initramfs-factory.ubi" >&2; exit 1; }
+        test -e "${sysupgrade[0]}" || { echo "缺少 squashfs-sysupgrade.bin" >&2; exit 1; }
+        cp -- "${initramfs[@]}" "${sysupgrade[@]}" "$GITHUB_WORKSPACE/out/"
+        cd "$GITHUB_WORKSPACE/openwrt"
+        {
+          printf 'x-wrt %s\n' "$(git rev-parse HEAD)"
+          for feed in feeds/*; do
+            test -d "$feed/.git" && printf '%s %s\n' "$(basename "$feed")" "$(git -C "$feed" rev-parse HEAD)"
+          done
+        } > "$GITHUB_WORKSPACE/out/source-versions.txt"
+        cp .config "$GITHUB_WORKSPACE/out/config.build"
+        cd "$GITHUB_WORKSPACE/out"
+        sha256sum -- * > sha256sums.txt
         ls -lh
 
     - name: Upload firmware to release
-      uses: softprops/action-gh-release@master
+      uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # master, 2026-08-30
       with:
-        tag_name: x-wrt-ax5400_${{ env.FILE_DATE }}
+        tag_name: x-wrt-ax5400_${{ env.FILE_DATE }}_${{ github.run_number }}
         files: out/*
         body: |
           X-WRT qualcommax/ipq50xx —— Xiaomi Redmi AX5400（RA74），集成 PassWall（Xray + SingBox）
@@ -141,7 +171,7 @@ jobs:
           3. `sysupgrade -n -v` 刷 `squashfs-sysupgrade.bin` 固化
 
     - name: Delete old releases
-      uses: mgz0227/delete-older-releases@master
+      uses: mgz0227/delete-older-releases@e721aa070f92a939a50ef0476e4a060d037a0073 # master, 2026-03-11
       with:
         keep_latest: 2
         delete_tags: true
