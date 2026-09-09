@@ -1,127 +1,95 @@
-# Redmi AX5400 firmware builds
+# ImmortalWrt build for Redmi AX5400
 
-X-WRT 与 ImmortalWrt 固件自动编译流水线。当前机型：**Xiaomi Redmi AX5400**（`qualcommax/ipq50xx`），集成 PassWall。
+面向 **Xiaomi Redmi AX5400（RA74）** 的 ImmortalWrt 自动编译方案，目标平台为 `qualcommax/ipq50xx`，集成 PassWall，并默认仅保留 SingBox 核心。
 
-## 硬件核对
+## 硬件信息
 
 | 项目 | 值 |
 |---|---|
-| 型号代码 | **RA74**（机身标签核对） |
-| SoC | Qualcomm IPQ5018 双核 Cortex-A53 @1.0GHz |
+| 型号代码 | RA74（请以机身标签为准） |
+| SoC | Qualcomm IPQ5018 双核 Cortex-A53 @ 1.0 GHz |
 | 内存 / 闪存 | 512 MiB DDR3L / 128 MiB NAND |
-| 无线 | IPQ5018 2.4G(2x2) + QCN9024 5G(4x4) |
-| OpenWrt 定义 | `target/linux/qualcommax/image/ipq50xx.mk` → `xiaomi_redmi-ax5400` |
+| 无线 | IPQ5018 2.4 GHz（2x2）+ QCN9024 5 GHz（4x4） |
+| 构建目标 | `qualcommax/ipq50xx` / `xiaomi_redmi-ax5400` |
 
-> Redmi AX6000 是 MT7986（mediatek-filogic），AX6S/AX3200 是 MT7622，都不是 ipq50xx，刷错变砖。
+> Redmi AX6000、AX6S 和 AX3200 使用不同平台，不能使用本仓库固件。刷错固件可能导致设备变砖。
 
 ## 目录结构
 
-```
-.github/workflows/qualcommax_ipq50xx.yml   编译流水线
-qualcommax/ipq50xx/xiaomi_redmi-ax5400/
-├── diy/diy.sh        改浅克隆 + 固定 feeds + 接入 PassWall 源（置顶保证同名包优先）
-├── passwall.config   追加到官方模板的 PassWall 配置项
-└── wireless.config   无线包显式置 =y（关 MULTI_PROFILE 后的必要补偿）
-build.sh              本地 / WSL2 一键编译
+```text
+.github/
+├── openwrt-build-packages.txt
+└── workflows/immortalwrt_qualcommax_ipq50xx.yml
 immortalwrt/qualcommax/ipq50xx/xiaomi_redmi-ax5400/
-├── config.seed       ImmortalWrt 设备及 PassWall 最小配置
-└── diy/diy.sh        固定 feeds 并置顶 PassWall
+├── config.seed
+└── diy/diy.sh
 ```
-
-新增机型时照这个结构加一层目录、复制一份 workflow 改 `DEVICE_PATH` 即可。
-
-## ImmortalWrt 构建
-
-工作流 **Build ImmortalWrt for Redmi AX5400** 使用 ImmortalWrt master 的固定提交，采用官方设备 profile，因此无线驱动、双频固件和 BDF 由设备定义自动加入。构建同时集成 PassWall，默认只保留 SingBox。
-
-- 推送 `immortalwrt/**` 或其 workflow 时自动构建
-- 每月 1 日、16 日 08:30 CST 定时构建
-- Release tag：`immortalwrt-ax5400_<日期>_<运行序号>`
-- 默认 LAN：`192.168.1.1`；如果上级主路由也是该网段，刷机后应先修改 LAN 网段
-- 该方案使用标准 ath11k，不包含 NSS Wi-Fi offload
 
 ## 自动构建
 
-- 每月 1 日、16 日 08:00 CST 自动构建
-- 推送修改到 `main`（仅当 `.github/workflows/**` 或 `qualcommax/**` 变动）触发
-- Actions 页手动运行 **Build X-WRT for Redmi AX5400**，可选：
-  - `ssh`：开 SSH 进 runner 调试
-  - `keep_cores`：默认 `singbox`，也可选 `xray` / `both`
-- 编译完成后发布到 Releases，tag 为 `x-wrt-ax5400_<日期>_<运行序号>`，只保留最近 2 个
-- X-WRT、官方 feeds 与 PassWall 均固定到明确提交；升级时需在 workflow、`build.sh` 和 `diy.sh` 中显式更新提交号
-- Release 同时包含 `source-versions.txt`、`config.build` 和 SHA-256 校验文件，便于追踪构建来源
+工作流名称为 **Build ImmortalWrt for Redmi AX5400**：
 
-首次使用前确认仓库 **Settings → Actions → General** 已允许运行工作流并开放读写权限（用于上传 Release）。
+- 使用 `immortalwrt/immortalwrt` 的固定提交，确保构建可复现。
+- 推送 ImmortalWrt 设备配置、共享依赖清单或工作流修改时触发。
+- 每月 1 日和 16 日北京时间 08:30 定时构建。
+- 也可在 GitHub Actions 页面手动运行。
+- 使用官方设备 profile，设备无线驱动、固件和 BDF 由 profile 自动选入。
+- 集成 PassWall，默认仅编译 SingBox，并使用 nftables 透明代理方案。
+- 使用标准 ath11k，不包含 NSS Wi-Fi offload。
 
-产物：
+构建成功后会创建 Release，标签格式为：
 
-```
-x-wrt-<ver>-qualcommax-ipq50xx-xiaomi_redmi-ax5400-initramfs-factory.ubi   过渡镜像
-x-wrt-<ver>-qualcommax-ipq50xx-xiaomi_redmi-ax5400-squashfs-factory.ubi
-x-wrt-<ver>-qualcommax-ipq50xx-xiaomi_redmi-ax5400-squashfs-sysupgrade.bin 正式固件
+```text
+immortalwrt-ax5400_<日期>_<运行序号>
 ```
 
-默认只编译 SingBox；编译耗时约 1.5–3 小时（代理核心是 Go 编写，会先编译 host golang）。
+主要固件产物：
 
-## 本地编译
-
-```bash
-./build.sh                  # 全量编译
-./build.sh menuconfig       # 先自己勾包再编译
-XWRT_REF=<commit-or-tag> JOBS=8 ./build.sh
-KEEP_CORES=xray ./build.sh  # 改为只保留 Xray；也可设为 both
+```text
+*-qualcommax-ipq50xx-xiaomi_redmi-ax5400-initramfs-factory.ubi
+*-qualcommax-ipq50xx-xiaomi_redmi-ax5400-squashfs-sysupgrade.bin
 ```
 
-要求：Ubuntu 22.04/24.04、Debian 12 或 WSL2；**必须在 ext4 原生目录**（`~/`），不能在 `/mnt/c`；预留 40GB 磁盘。
+首次使用前，请在仓库的 **Settings → Actions → General** 中确认工作流可运行，并允许工作流写入仓库内容，以便创建 Release。
 
-脚本默认使用与 Actions 相同的固定 X-WRT 提交。已有源码目录会先 fetch 并切换到指定提交；如果目录中存在会被覆盖的未提交修改，Git 会拒绝切换并让脚本安全退出。
+## 网络注意事项
 
-## PassWall 接入要点
+固件默认 LAN 地址为 `192.168.1.1`。如果 WAN 上级主路由也使用 `192.168.1.0/24`，WAN 与 LAN 子网冲突会导致转发异常。刷机后应先把本机 LAN 改为其他网段，例如 `192.168.2.1/24`，再连接 WAN。
 
-1. **仓库地址已迁移**：`xiaorouji/openwrt-passwall` 已 404，现址为
-   `Openwrt-Passwall/openwrt-passwall` + `Openwrt-Passwall/openwrt-passwall-packages`（main 分支）
-2. **同名包靠"排在最前面"抢占，不靠删文件**：x-wrt packages feed 自带 `xray-core`、`sing-box`、`v2ray-geodata` 和 passwall-packages 同名。`scripts/feeds` 的 install 是先到先得——`lookup_src()` 按 `feeds.conf.default` 顺序取第一个含该包的 feed，随后用全局 `%installed` 标记，后面的同名包一律跳过。所以 `diy.sh` 把两个 PassWall 源插到文件**开头**。`chinadns-ng`、`geoview` 官方 feed 没有，只能由 passwall-packages 提供
-   - 不要用 `rm -rf feeds/packages/net/xray-core` 来解决：目录删了，`feeds/packages.index` 里的条目还在，install 只会建出一个悬空符号链接，问题更隐蔽
-3. **透明代理选 nftables**：x-wrt 用 firewall4，选 iptables 的话规则不生效
-4. **省时间**：官方模板默认 `CONFIG_TARGET_MULTI_PROFILE=y` 会编十几台设备，workflow 里已关掉并改成只编 AX5400
-   - **副作用要注意**：关掉后 `CONFIG_TARGET_DEVICE_PACKAGES_..._xiaomi_redmi-ax5400` 这条逐设备包列表会失效，官方模板里那些 `=m` 的包（含全部无线驱动、固件、wpad）就只产 ipk、不打进镜像，**刷完没有 WiFi**。已在 `wireless.config` 里把必需项显式改成 `=y` 补偿，并在 `defconfig` 后和打包前各做一次校验
-   - 不要为了"还原官方包集合"改回 `MULTI_PROFILE=y`：那条列表含 openvpn / nginx / uwsgi / wireguard 等几十个包，编译时间会显著变长
-5. **来源校验**：安装 feeds 后会检查 PassWall、Xray、SingBox 和 geodata 的符号链接来源；上游目录变化或同名包冲突会直接终止构建
-6. **必须浅克隆**：X-WRT 默认用 `src-git-full`，会 `git clone` 每个 feed 的**完整历史**，8 个 feed 合计数 GB。在 GitHub-hosted runner 上会慢到让 feeds 步骤挂死、最终 runner 心跳失联（`The hosted runner lost communication with the server`）。`diy.sh` 已把所有 `src-git-full` 改成 `src-git`，其 `init_commit` 模板为 `git clone --depth 1` + `git fetch --depth=1 origin <commit>`，与我们固定的提交完全兼容
-
-## 版本升级
-
-为了让发布的固件可复现、可审计，流水线不自动追踪上游分支。升级时：
-
-1. 更新 `.github/workflows/qualcommax_ipq50xx.yml` 和 `build.sh` 中的 `XWRT_REF`
-2. 更新 `diy.sh` 中 X-WRT 官方 feeds 和两个 PassWall feed 的提交号
-3. 手动运行一次 Actions，确认配置、编译及两个必需镜像的校验全部通过
-4. 检查 Release 内的 `source-versions.txt` 与预期提交一致
+WAN 接入可提供 DHCP 的上级路由器时，WAN 协议应设置为 DHCP 客户端，并确认 WAN 物理端口已分配到 `wan` 网络。
 
 ## 刷机
 
-1. **开 SSH**：[XMiR Patcher](https://github.com/openwrt-xiaomi/xmir-patcher)（`run.bat`，不要管理员运行）。原厂固件需 ≤ 1.0.63，高于此版本先降级
-2. **备份**：菜单选 4，备份全部分区（存到 `xmir-patcher/backups/`）
-3. **过渡镜像**：刷 `initramfs-factory.ubi`
-   （也可 SSH 后 `ubiformat /dev/mtd19 -y -f /tmp/xxx-initramfs-factory.ubi` + `nvram set flag_boot_rootfs=1` + `nvram commit`）
-4. **固化**：`sysupgrade -n -v /tmp/xxx-squashfs-sysupgrade.bin`
+1. 使用 [XMiR Patcher](https://github.com/openwrt-xiaomi/xmir-patcher) 为原厂系统开启 SSH。原厂固件版本需满足该工具的支持要求。
+2. 备份全部分区，并将备份保存到安全位置。
+3. 先启动或刷入 `initramfs-factory.ubi` 过渡镜像。
+4. 进入 ImmortalWrt 后执行：
 
-> 这台机器用的是 UBI unified rootfs，**必须走 initramfs 过渡**，不能直接刷 sysupgrade。
+   ```sh
+   sysupgrade -n -v /tmp/<firmware>-squashfs-sysupgrade.bin
+   ```
+
+此设备采用 UBI rootfs。不要跳过 initramfs 过渡步骤，也不要在未核对设备型号、分区布局和启动槽状态时直接写入闪存。
+
+## 更新上游版本
+
+为了保证结果可复现，工作流不会自动跟随上游最新提交。升级时应：
+
+1. 更新工作流中的 ImmortalWrt 固定提交。
+2. 更新 `diy.sh` 中 feeds 和 PassWall 的固定提交。
+3. 手动运行一次工作流，检查配置校验、包来源校验和固件打包结果。
+4. 核对 Release 中记录的源码版本与预期一致。
 
 ## 常见问题
 
-| 现象 | 原因 / 处理 |
+| 现象 | 检查方向 |
 |---|---|
-| feeds 找不到 passwall | 地址写成了已失效的 `xiaorouji/*` |
-| `xray-core 未从 passwall_packages 安装` | PassWall 源没排在 `feeds.conf.default` 开头，同名包被官方 feed 抢走 |
-| 刷完没有 WiFi | 关了 MULTI_PROFILE 导致逐设备包列表失效，无线包停在 `=m`。见 `wireless.config`；已在设备上可先用 opkg 救急 |
-| 无线接口起不来 | 缺 `ipq-wifi-xiaomi_redmi-ax5400`（板级校准数据 BDF）或 ath11k 固件 |
-| `xx 是悬空符号链接` | 用 `rm -rf` 删过官方 feed 目录但没重建 index，改成置顶即可 |
-| 编译超时 | 已关 MULTI_PROFILE 只编一台；仍超时就把 `keep_cores` 设成单个 |
-| golang 编译失败 | 内存或磁盘不足，减 JOBS 或换更大机器 |
-| 刷完无线不工作 | 型号不对应，核对 RA74 |
-| PassWall 无分流规则 | 缺 geoview（SingBox 25.3.9+ 强依赖）或 geodata |
+| WAN 获得地址但无法访问上级网络 | 检查 WAN/LAN 是否使用相同子网、默认路由、DNS 和防火墙区域 |
+| PassWall 缺少 SingBox | 检查 PassWall packages feed 是否成功加载，以及固定提交是否仍包含对应包 |
+| 无线接口不存在或无法启动 | 检查 ath11k 固件、`ipq-wifi-xiaomi_redmi-ax5400` BDF 和设备型号 |
+| Go 软件包编译失败 | 检查 runner 的磁盘与内存，并减少并行任务数 |
+| 固件体积过大 | 从 `config.seed` 移除不需要的 LuCI 应用或代理组件 |
 
 ## 致谢
 
-[X-WRT](https://github.com/x-wrt/x-wrt) · [PassWall](https://github.com/Openwrt-Passwall/openwrt-passwall) · [XMiR Patcher](https://github.com/openwrt-xiaomi/xmir-patcher)
+[ImmortalWrt](https://github.com/immortalwrt/immortalwrt) · [PassWall](https://github.com/Openwrt-Passwall/openwrt-passwall) · [XMiR Patcher](https://github.com/openwrt-xiaomi/xmir-patcher)
