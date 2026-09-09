@@ -20,7 +20,8 @@ X-WRT 固件自动编译流水线。当前机型：**Xiaomi Redmi AX5400**（`qu
 .github/workflows/qualcommax_ipq50xx.yml   编译流水线
 qualcommax/ipq50xx/xiaomi_redmi-ax5400/
 ├── diy/diy.sh        接入 PassWall 源（置顶以保证同名包优先）
-└── passwall.config   追加到官方模板的配置项
+├── passwall.config   追加到官方模板的 PassWall 配置项
+└── wireless.config   无线包显式置 =y（关 MULTI_PROFILE 后的必要补偿）
 build.sh              本地 / WSL2 一键编译
 ```
 
@@ -69,6 +70,8 @@ XWRT_REF=<commit-or-tag> JOBS=8 ./build.sh
    - 不要用 `rm -rf feeds/packages/net/xray-core` 来解决：目录删了，`feeds/packages.index` 里的条目还在，install 只会建出一个悬空符号链接，问题更隐蔽
 3. **透明代理选 nftables**：x-wrt 用 firewall4，选 iptables 的话规则不生效
 4. **省时间**：官方模板默认 `CONFIG_TARGET_MULTI_PROFILE=y` 会编十几台设备，workflow 里已关掉并改成只编 AX5400
+   - **副作用要注意**：关掉后 `CONFIG_TARGET_DEVICE_PACKAGES_..._xiaomi_redmi-ax5400` 这条逐设备包列表会失效，官方模板里那些 `=m` 的包（含全部无线驱动、固件、wpad）就只产 ipk、不打进镜像，**刷完没有 WiFi**。已在 `wireless.config` 里把必需项显式改成 `=y` 补偿，并在 `defconfig` 后和打包前各做一次校验
+   - 不要为了"还原官方包集合"改回 `MULTI_PROFILE=y`：那条列表含 openvpn / nginx / uwsgi / wireguard 等几十个包，编译时间会显著变长
 5. **来源校验**：安装 feeds 后会检查 PassWall、Xray、SingBox 和 geodata 的符号链接来源；上游目录变化或同名包冲突会直接终止构建
 
 ## 版本升级
@@ -96,6 +99,8 @@ XWRT_REF=<commit-or-tag> JOBS=8 ./build.sh
 |---|---|
 | feeds 找不到 passwall | 地址写成了已失效的 `xiaorouji/*` |
 | `xray-core 未从 passwall_packages 安装` | PassWall 源没排在 `feeds.conf.default` 开头，同名包被官方 feed 抢走 |
+| 刷完没有 WiFi | 关了 MULTI_PROFILE 导致逐设备包列表失效，无线包停在 `=m`。见 `wireless.config`；已在设备上可先用 opkg 救急 |
+| 无线接口起不来 | 缺 `ipq-wifi-xiaomi_redmi-ax5400`（板级校准数据 BDF）或 ath11k 固件 |
 | `xx 是悬空符号链接` | 用 `rm -rf` 删过官方 feed 目录但没重建 index，改成置顶即可 |
 | 编译超时 | 已关 MULTI_PROFILE 只编一台；仍超时就把 `keep_cores` 设成单个 |
 | golang 编译失败 | 内存或磁盘不足，减 JOBS 或换更大机器 |

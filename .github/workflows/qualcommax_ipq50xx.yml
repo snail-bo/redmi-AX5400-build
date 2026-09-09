@@ -116,6 +116,9 @@ jobs:
         sed -i 's/^CONFIG_TARGET_PER_DEVICE_ROOTFS=y/# CONFIG_TARGET_PER_DEVICE_ROOTFS is not set/' .config
         echo 'CONFIG_TARGET_qualcommax_ipq50xx_DEVICE_xiaomi_redmi-ax5400=y' >> .config
         cat $GITHUB_WORKSPACE/$DEVICE_PATH/passwall.config >> .config
+        # 关掉 MULTI_PROFILE 后官方 per-device 包列表会失效，无线包全部退回 =m，
+        # 而 =m 只产 ipk、不打进镜像。这里显式补回 =y，见 wireless.config。
+        cat $GITHUB_WORKSPACE/$DEVICE_PATH/wireless.config >> .config
         # 只保留一个代理内核时裁剪（先删 =y 行再写 is not set）
         if [ "${{ github.event.inputs.keep_cores }}" = "xray" ]; then
           sed -i '/INCLUDE_SingBox/d' .config
@@ -126,6 +129,17 @@ jobs:
         fi
         echo 'CONFIG_CCACHE=y' >> .config
         make defconfig
+        # 校验：无线相关包必须真的是 =y。=m 只会产出 ipk，不会打进 sysupgrade
+        # 镜像，刷完就是没有 WiFi —— 这一步能防止 defconfig 把它们改回 =m。
+        for pkg in kmod-cfg80211 kmod-mac80211 kmod-ath kmod-ath11k kmod-ath11k-ahb \
+                   kmod-ath11k-pci ath11k-firmware-ipq5018 ath11k-firmware-qcn9074 \
+                   ipq-wifi-xiaomi_redmi-ax5400 wpad-openssl hostapd-common; do
+          grep -qx "CONFIG_PACKAGE_${pkg}=y" .config || {
+            echo "$pkg 未内置为 =y，刷机后将没有 WiFi" >&2
+            grep -E "^#? ?CONFIG_PACKAGE_${pkg}=" .config >&2
+            exit 1
+          }
+        done
 
     - name: SSH connect to Actions
       uses: P3TERX/ssh2actions@71006b93bff498b020448ac10964f8a5d0f9f32c # main, 2020-09-12
@@ -147,6 +161,13 @@ jobs:
       run: |
         set -euo pipefail
         mkdir -p "$GITHUB_WORKSPACE/out"
+        # 编译完再确认一次无线确实进了 rootfs（配置写对但依赖没跟上时这里会暴露）
+        rootfs=$(find openwrt/build_dir -type d -name 'root-qualcommax' -print -quit)
+        test -n "$rootfs" || { echo "找不到 root-qualcommax" >&2; exit 1; }
+        test -e "$rootfs/usr/sbin/hostapd" || test -e "$rootfs/usr/sbin/wpad" || {
+          echo "rootfs 缺少 hostapd/wpad，无线起不来" >&2; exit 1; }
+        test -d "$rootfs/lib/firmware/ath11k" || {
+          echo "rootfs 缺少 ath11k 固件" >&2; exit 1; }
         cd openwrt/bin/targets/qualcommax/ipq50xx
         initramfs=( *redmi-ax5400*initramfs-factory.ubi )
         sysupgrade=( *redmi-ax5400*squashfs-sysupgrade.bin )
