@@ -1,6 +1,6 @@
-# x-wrt-build
+# Redmi AX5400 firmware builds
 
-X-WRT 固件自动编译流水线。当前机型：**Xiaomi Redmi AX5400**（`qualcommax/ipq50xx`），集成 PassWall。
+X-WRT 与 ImmortalWrt 固件自动编译流水线。当前机型：**Xiaomi Redmi AX5400**（`qualcommax/ipq50xx`），集成 PassWall。
 
 ## 硬件核对
 
@@ -23,9 +23,22 @@ qualcommax/ipq50xx/xiaomi_redmi-ax5400/
 ├── passwall.config   追加到官方模板的 PassWall 配置项
 └── wireless.config   无线包显式置 =y（关 MULTI_PROFILE 后的必要补偿）
 build.sh              本地 / WSL2 一键编译
+immortalwrt/qualcommax/ipq50xx/xiaomi_redmi-ax5400/
+├── config.seed       ImmortalWrt 设备及 PassWall 最小配置
+└── diy/diy.sh        固定 feeds 并置顶 PassWall
 ```
 
 新增机型时照这个结构加一层目录、复制一份 workflow 改 `DEVICE_PATH` 即可。
+
+## ImmortalWrt 构建
+
+工作流 **Build ImmortalWrt for Redmi AX5400** 使用 ImmortalWrt master 的固定提交，采用官方设备 profile，因此无线驱动、双频固件和 BDF 由设备定义自动加入。构建同时集成 PassWall，默认只保留 SingBox。
+
+- 推送 `immortalwrt/**` 或其 workflow 时自动构建
+- 每月 1 日、16 日 08:30 CST 定时构建
+- Release tag：`immortalwrt-ax5400_<日期>_<运行序号>`
+- 默认 LAN：`192.168.1.1`；如果上级主路由也是该网段，刷机后应先修改 LAN 网段
+- 该方案使用标准 ath11k，不包含 NSS Wi-Fi offload
 
 ## 自动构建
 
