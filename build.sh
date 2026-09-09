@@ -5,11 +5,12 @@
 # 用法：
 #   ./build.sh                 # 全量编译
 #   ./build.sh menuconfig      # 先弹出菜单自己选包，再编译
-#   XWRT_REF=<commit-or-tag> JOBS=8 ./build.sh
+#   KEEP_CORES=xray XWRT_REF=<commit-or-tag> JOBS=8 ./build.sh
 # ---------------------------------------------------------------
 set -euo pipefail
 
 XWRT_REF=${XWRT_REF:-1e5118167060b432564801453d5a8eb63015962e}
+KEEP_CORES=${KEEP_CORES:-singbox}
 JOBS=${JOBS:-$(nproc)}
 WORK=${WORK:-$HOME/x-wrt-build}
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
@@ -68,11 +69,28 @@ sed -i 's/^CONFIG_TARGET_MULTI_PROFILE=y/# CONFIG_TARGET_MULTI_PROFILE is not se
 sed -i 's/^CONFIG_TARGET_PER_DEVICE_ROOTFS=y/# CONFIG_TARGET_PER_DEVICE_ROOTFS is not set/' .config
 echo 'CONFIG_TARGET_qualcommax_ipq50xx_DEVICE_xiaomi_redmi-ax5400=y' >> .config
 cat "$DEVICE_DIR/passwall.config" >> .config
+if [ "$KEEP_CORES" = "xray" ]; then
+  sed -i '/INCLUDE_SingBox/d' .config
+  echo '# CONFIG_PACKAGE_luci-app-passwall_INCLUDE_SingBox is not set' >> .config
+elif [ "$KEEP_CORES" = "singbox" ]; then
+  sed -i '/INCLUDE_Xray/d' .config
+  echo '# CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Xray is not set' >> .config
+elif [ "$KEEP_CORES" != "both" ]; then
+  echo "KEEP_CORES 只能是 singbox、xray 或 both" >&2
+  exit 1
+fi
 # 关掉 MULTI_PROFILE 后官方 per-device 包列表失效，无线包退回 =m（只产 ipk、
 # 不打进镜像）。这里显式补回 =y，见 wireless.config。
 cat "$DEVICE_DIR/wireless.config" >> .config
 echo 'CONFIG_CCACHE=y' >> .config
 make defconfig
+if [ "$KEEP_CORES" = "singbox" ]; then
+  grep -qx 'CONFIG_PACKAGE_luci-app-passwall_INCLUDE_SingBox=y' .config
+  grep -qx '# CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Xray is not set' .config
+elif [ "$KEEP_CORES" = "xray" ]; then
+  grep -qx 'CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Xray=y' .config
+  grep -qx '# CONFIG_PACKAGE_luci-app-passwall_INCLUDE_SingBox is not set' .config
+fi
 # 校验：无线相关包必须真的是 =y，否则刷完没有 WiFi
 for pkg in kmod-cfg80211 kmod-mac80211 kmod-ath kmod-ath11k kmod-ath11k-ahb \
            kmod-ath11k-pci ath11k-firmware-ipq5018 ath11k-firmware-qcn9074 \
@@ -90,7 +108,14 @@ if [ "${1:-}" = "menuconfig" ]; then
 fi
 
 # ---------- 6. 下载 & 编译 ----------
-make download -j8
+download_jobs=$(nproc)
+if [ "$download_jobs" -gt 4 ]; then download_jobs=4; fi
+if ! make download -j"$download_jobs"; then
+  echo "==> 并发下载失败，清理残缺文件后改单线程重试"
+  find dl -size -1k -delete
+  make download -j1 V=s
+fi
+find dl -size -1k -delete
 make -j"$JOBS" || make -j1 V=s
 
 # ---------- 7. 产物 ----------

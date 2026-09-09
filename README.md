@@ -33,7 +33,7 @@ build.sh              本地 / WSL2 一键编译
 - 推送修改到 `main`（仅当 `.github/workflows/**` 或 `qualcommax/**` 变动）触发
 - Actions 页手动运行 **Build X-WRT for Redmi AX5400**，可选：
   - `ssh`：开 SSH 进 runner 调试
-  - `keep_cores`：`both` / `xray` / `singbox`，只留一个内核能省编译时间和体积
+  - `keep_cores`：默认 `singbox`，也可选 `xray` / `both`
 - 编译完成后发布到 Releases，tag 为 `x-wrt-ax5400_<日期>_<运行序号>`，只保留最近 2 个
 - X-WRT、官方 feeds 与 PassWall 均固定到明确提交；升级时需在 workflow、`build.sh` 和 `diy.sh` 中显式更新提交号
 - Release 同时包含 `source-versions.txt`、`config.build` 和 SHA-256 校验文件，便于追踪构建来源
@@ -48,7 +48,7 @@ x-wrt-<ver>-qualcommax-ipq50xx-xiaomi_redmi-ax5400-squashfs-factory.ubi
 x-wrt-<ver>-qualcommax-ipq50xx-xiaomi_redmi-ax5400-squashfs-sysupgrade.bin 正式固件
 ```
 
-编译耗时约 1.5–3 小时（Xray/SingBox 是 Go 写的，会先编一整套 host golang）。
+默认只编译 SingBox；编译耗时约 1.5–3 小时（代理核心是 Go 编写，会先编译 host golang）。
 
 ## 本地编译
 
@@ -56,6 +56,7 @@ x-wrt-<ver>-qualcommax-ipq50xx-xiaomi_redmi-ax5400-squashfs-sysupgrade.bin 正�
 ./build.sh                  # 全量编译
 ./build.sh menuconfig       # 先自己勾包再编译
 XWRT_REF=<commit-or-tag> JOBS=8 ./build.sh
+KEEP_CORES=xray ./build.sh  # 改为只保留 Xray；也可设为 both
 ```
 
 要求：Ubuntu 22.04/24.04、Debian 12 或 WSL2；**必须在 ext4 原生目录**（`~/`），不能在 `/mnt/c`；预留 40GB 磁盘。
