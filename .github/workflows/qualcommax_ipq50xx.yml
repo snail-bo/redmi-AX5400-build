@@ -47,6 +47,9 @@ env:
 jobs:
   build:
     runs-on: ubuntu-24.04
+    # 编译实测约 2.5h；这里留足余量，但不允许无限跑下去。
+    # 没有这个上限时，任何一步挂死都会一直占着 runner 直到心跳超时。
+    timeout-minutes: 330
     if: github.event_name != 'workflow_dispatch' || github.event.repository.owner.id == github.event.sender.id
 
     steps:
@@ -54,17 +57,54 @@ jobs:
       uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # main, 2026-07-20
 
     - name: Initialize environment
+      # 正常约 3 分钟。实测镜像源偶发卡死会一直挂着不返回，
+      # 最终表现为 "runner lost communication"，所以这里必须设上限。
+      timeout-minutes: 35
       env:
         DEBIAN_FRONTEND: noninteractive
       run: |
-        sudo -E apt-get -qq update > /dev/null
+        set -euo pipefail
+        # runner 镜像偶尔会在后台跑 apt-daily/unattended-upgrades 占着 dpkg 锁，
+        # 用户的 apt 会静默排队等锁。先停掉它们并设 Lock::Timeout 兜底。
+        for svc in apt-daily.service apt-daily-upgrade.service unattended-upgrades.service; do
+          sudo systemctl stop "$svc" 2>/dev/null || true
+        done
+        # --force-conf{def,old}：任何 debconf 提示都走默认值，绝不等待交互
+        APT_OPTS=(
+          -o Dpkg::Options::=--force-confdef
+          -o Dpkg::Options::=--force-confold
+          -o DPkg::Lock::Timeout=120
+          -o Acquire::Retries=3
+          -o Acquire::http::Timeout=30
+          -o Acquire::https::Timeout=30
+        )
+        # 更新索引：单独加硬超时，镜像源慢时快速失败而不是挂死
+        timeout 300 sudo -E apt-get -qq update "${APT_OPTS[@]}"
         mapfile -t packages < .github/openwrt-build-packages.txt
-        sudo -E apt-get -qq install -y "${packages[@]}" > /dev/null
-        sudo -E apt-get -qq autoremove --purge > /dev/null
-        sudo -E apt-get -qq clean > /dev/null
+        echo "待安装依赖 ${#packages[@]} 个"
+        # --no-install-recommends 减少要装的包（尤其避免 ecj 拉进整包 JDK 推荐项）
+        # 镜像源偶发卡死时，清掉索引重来一次通常就能过
+        for attempt in 1 2; do
+          if timeout 600 sudo -E apt-get -qq install -y --no-install-recommends \
+               "${APT_OPTS[@]}" "${packages[@]}"; then
+            break
+          fi
+          if [ "$attempt" -eq 2 ]; then
+            echo "::error::apt 依赖安装两次均失败" >&2
+            exit 1
+          fi
+          echo "::warning::apt 第 $attempt 次失败，清理索引后重试"
+          sudo rm -rf /var/lib/apt/lists/* || true
+          timeout 300 sudo -E apt-get -qq update "${APT_OPTS[@]}" || true
+        done
+        sudo -E apt-get -qq autoremove --purge -y || true
+        sudo -E apt-get -qq clean
         sudo timedatectl set-timezone "$TZ"
         sudo mkdir -p /workdir
-        sudo chown $USER:$GROUPS /workdir
+        sudo chown "$USER":"$GROUPS" /workdir
+        echo "==> 资源快照"
+        free -h | sed 's/^/  /'
+        df -h / /workdir | sed 's/^/  /'
 
     - name: Clone source code
       working-directory: /workdir
@@ -85,6 +125,8 @@ jobs:
           ccache-${{ runner.os }}-ax5400-
 
     - name: Update & Install feeds
+      # 要 clone 多个 feed 仓库，实测约 2 分钟，给 30 分钟上限。
+      timeout-minutes: 30
       run: |
         chmod +x $DEVICE_PATH/diy/diy.sh
         cd openwrt
@@ -146,16 +188,33 @@ jobs:
       if: github.event.inputs.ssh == 'true'
 
     - name: Download package
+      # 全走网络。实测约 11 分钟，源站慢时会显著拉长，给 40 分钟上限。
+      timeout-minutes: 40
       working-directory: ./openwrt
       run: |
         make download -j$(( $(nproc) * 2 ))
         find dl -size -1k -exec rm -f {} \;
 
     - name: Compile firmware
+      # 实测 -j5 约 143 分钟。留到 250 是给兜底重跑一点空间；
+      # 并行那次的输出是直接进 job 日志的，即使兜底被 job 上限掐断也够定位问题。
+      timeout-minutes: 250
       run: |
         cd openwrt
-        echo -e "$(nproc) thread compile"
-        make -j$(( $(nproc) + 1 )) || make -j1 V=s
+        jobs=$(( $(nproc) + 1 ))
+        echo "==> $(nproc) 核，使用 -j$jobs"
+        free -h | sed 's/^/  /'
+        df -h . | sed 's/^/  /'
+        if ! make -j"$jobs"; then
+          echo "::warning::并行编译失败，改单线程重试（输出落盘，只回显尾部）"
+          # V=s 一次能打出几十万行，直接进 job 日志会拖慢 runner 心跳。
+          # 落盘后再 tail，避免把日志管道撑爆导致失联。
+          if ! make -j1 V=s > build-retry.log 2>&1; then
+            echo "::error::单线程重试仍然失败，最后 300 行："
+            tail -n 300 build-retry.log
+            exit 1
+          fi
+        fi
 
     - name: Package firmware
       run: |
@@ -200,6 +259,9 @@ jobs:
           3. `sysupgrade -n -v` 刷 `squashfs-sysupgrade.bin` 固化
 
     - name: Delete old releases
+      # 只是清理历史产物。固件这一步之前已经上传成功，
+      # 让它失败会把整个 job 染红，误导成"编译失败"（run 5 就踩过）。
+      continue-on-error: true
       uses: mgz0227/delete-older-releases@e721aa070f92a939a50ef0476e4a060d037a0073 # master, 2026-03-11
       with:
         keep_latest: 2
