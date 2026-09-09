@@ -39,10 +39,14 @@ git -C "$WORK/x-wrt" checkout --detach FETCH_HEAD
 cd "$WORK/x-wrt"
 
 # ---------- 3. feeds（PassWall 源与冲突包处理都在 diy.sh 里）----------
-./scripts/feeds update -a
+# 先改 feeds.conf 再拉取：diy.sh 会把 src-git-full 改成浅克隆的 src-git，
+# 顺序反了就会以全量历史去 clone（数 GB，很慢）。
 "$DEVICE_DIR/diy/diy.sh"
-# 只拉取 diy.sh 刚置顶的 PassWall feeds（官方 feeds 上一步已 update 完）
-./scripts/feeds update passwall_packages passwall_luci
+# 逐个 feed 拉取，单个仓库卡住时快速失败而不是整锅挂死
+for f in $(awk '/^src-git(-full)?[[:space:]]/{print $2}' feeds.conf.default); do
+  echo "==> update $f"
+  ./scripts/feeds update "$f"
+done
 ./scripts/feeds install -a
 # 校验：PassWall 相关包必须真正落在 passwall_* 目录下，且没有悬空链接
 luci_link="package/feeds/passwall_luci/luci-app-passwall"

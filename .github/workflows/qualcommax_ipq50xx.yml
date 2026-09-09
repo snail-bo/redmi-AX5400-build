@@ -124,16 +124,49 @@ jobs:
         restore-keys: |
           ccache-${{ runner.os }}-ax5400-
 
-    - name: Update & Install feeds
-      # 要 clone 多个 feed 仓库，实测约 2 分钟，给 30 分钟上限。
+    - name: Prepare feeds config
+      # 只改 feeds.conf.default（固定提交、置顶 PassWall、改浅克隆），秒级完成。
+      timeout-minutes: 5
+      run: |
+        set -euo pipefail
+        chmod +x "$DEVICE_PATH/diy/diy.sh"
+        cd openwrt
+        "$GITHUB_WORKSPACE/$DEVICE_PATH/diy/diy.sh"
+        echo "==> feeds.conf.default"
+        sed 's/^/  /' feeds.conf.default
+
+    - name: Update feeds
+      # 拆成"逐 feed 拉取"：单个仓库卡住时由 timeout 打断并重试，
+      # 不会像 feeds update -a 那样一个卡死拖垮整步、最终 runner 心跳失联。
+      timeout-minutes: 45
+      run: |
+        set -euo pipefail
+        cd openwrt
+        mapfile -t names < <(awk '/^src-git(-full)?[[:space:]]/{print $2}' feeds.conf.default)
+        echo "待拉取 feed: ${names[*]}"
+        for f in "${names[@]}"; do
+          echo "==> update $f"
+          for attempt in 1 2; do
+            if timeout 600 ./scripts/feeds update "$f"; then
+              break
+            fi
+            if [ "$attempt" -eq 2 ]; then
+              echo "::error::feed $f 两次拉取均失败" >&2
+              exit 1
+            fi
+            echo "::warning::$f 第 $attempt 次失败，清理后重试"
+            rm -rf "feeds/$f"
+          done
+        done
+        echo "==> 各 feed 体积"
+        du -sh feeds/* 2>/dev/null | sed 's/^/  /'
+        df -h . | sed 's/^/  /'
+
+    - name: Install feeds
       timeout-minutes: 30
       run: |
-        chmod +x $DEVICE_PATH/diy/diy.sh
+        set -euo pipefail
         cd openwrt
-        ./scripts/feeds update -a
-        $GITHUB_WORKSPACE/$DEVICE_PATH/diy/diy.sh
-        # 只拉取 diy.sh 刚置顶的 PassWall feeds（官方 feeds 上一步已 update 完）
-        ./scripts/feeds update passwall_packages passwall_luci
         ./scripts/feeds install -a
         # 校验：PassWall 相关包必须真正落在 passwall_* 目录下，且没有悬空链接
         luci_link="package/feeds/passwall_luci/luci-app-passwall"

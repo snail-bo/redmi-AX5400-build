@@ -3,6 +3,16 @@
 # 作用：接入 PassWall 源，并移除与 passwall-packages 重名的官方包
 set -e
 
+# 0. 全量克隆改浅克隆
+# X-WRT 默认用 src-git-full，其 init_commit 模板是 `git clone <url>` —— 拉完整历史。
+# 8 个 feed 合计数 GB，在 Actions runner 上既慢又吃内存与磁盘，实测会让
+# feeds 步骤挂到 runner 心跳失联。
+# src-git 的 init_commit 模板是：
+#   git clone --depth 1 <url> <dir> \
+#     && git fetch --depth=1 origin <commit> && git checkout <commit>
+# 只取一个提交快照，且与下面 pin 的 commit 完全兼容。
+sed -i -E 's/^src-git-full /src-git /' feeds.conf.default
+
 # 1. 固定 X-WRT 官方 feeds，避免同一源码提交在不同时间解析出不同依赖。
 pin_feed() {
   name="$1"

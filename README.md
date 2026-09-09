@@ -19,7 +19,7 @@ X-WRT 固件自动编译流水线。当前机型：**Xiaomi Redmi AX5400**（`qu
 ```
 .github/workflows/qualcommax_ipq50xx.yml   编译流水线
 qualcommax/ipq50xx/xiaomi_redmi-ax5400/
-├── diy/diy.sh        接入 PassWall 源（置顶以保证同名包优先）
+├── diy/diy.sh        改浅克隆 + 固定 feeds + 接入 PassWall 源（置顶保证同名包优先）
 ├── passwall.config   追加到官方模板的 PassWall 配置项
 └── wireless.config   无线包显式置 =y（关 MULTI_PROFILE 后的必要补偿）
 build.sh              本地 / WSL2 一键编译
@@ -73,6 +73,7 @@ XWRT_REF=<commit-or-tag> JOBS=8 ./build.sh
    - **副作用要注意**：关掉后 `CONFIG_TARGET_DEVICE_PACKAGES_..._xiaomi_redmi-ax5400` 这条逐设备包列表会失效，官方模板里那些 `=m` 的包（含全部无线驱动、固件、wpad）就只产 ipk、不打进镜像，**刷完没有 WiFi**。已在 `wireless.config` 里把必需项显式改成 `=y` 补偿，并在 `defconfig` 后和打包前各做一次校验
    - 不要为了"还原官方包集合"改回 `MULTI_PROFILE=y`：那条列表含 openvpn / nginx / uwsgi / wireguard 等几十个包，编译时间会显著变长
 5. **来源校验**：安装 feeds 后会检查 PassWall、Xray、SingBox 和 geodata 的符号链接来源；上游目录变化或同名包冲突会直接终止构建
+6. **必须浅克隆**：X-WRT 默认用 `src-git-full`，会 `git clone` 每个 feed 的**完整历史**，8 个 feed 合计数 GB。在 GitHub-hosted runner 上会慢到让 feeds 步骤挂死、最终 runner 心跳失联（`The hosted runner lost communication with the server`）。`diy.sh` 已把所有 `src-git-full` 改成 `src-git`，其 `init_commit` 模板为 `git clone --depth 1` + `git fetch --depth=1 origin <commit>`，与我们固定的提交完全兼容
 
 ## 版本升级
 
