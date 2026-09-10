@@ -23,20 +23,10 @@ CONFIG_PACKAGE_luci-app-passwall_INCLUDE_V2ray_Geodata=y
 # CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Simple_Obfs is not set
 # CONFIG_PACKAGE_luci-app-passwall_INCLUDE_V2ray_Plugin is not set
 
-# LEDE enables SSR Plus and several overlapping proxy cores by default.
-# Keep one proxy stack to avoid embedding Mihomo, Shadowsocks and SSR beside
-# SingBox in the firmware image.
-# CONFIG_PACKAGE_luci-app-ssr-plus is not set
-# CONFIG_PACKAGE_mihomo is not set
-# CONFIG_PACKAGE_shadowsocks-rust-sslocal is not set
-# CONFIG_PACKAGE_shadowsocksr-libev-ssr-local is not set
-# CONFIG_PACKAGE_shadowsocksr-libev-ssr-redir is not set
-# CONFIG_PACKAGE_simple-obfs-client is not set
-# CONFIG_PACKAGE_v2ray-plugin is not set
-
-# Keep LEDE's working IPQ5018 NSS-DP/SSDK network stack.
+# Keep the exact working Ethernet stack from OpenWrt e1915674ab.
 CONFIG_PACKAGE_kmod-qca-nss-dp=y
-CONFIG_PACKAGE_kmod-qca-nss-drv=y
 CONFIG_PACKAGE_kmod-qca-ssdk=y
+# CONFIG_PACKAGE_kmod-qca-nss-drv is not set
+# CONFIG_PACKAGE_kmod-qca-nss-ecm is not set
 
 CONFIG_CCACHE=y

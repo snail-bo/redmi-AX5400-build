@@ -1,0 +1,228 @@
+name: Build OpenWrt e1915674ab for Redmi AX5400
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/openwrt_qualcommax_ipq50xx.yml"
+      - ".github/openwrt-build-packages.txt"
+      - "openwrt/**"
+  workflow_dispatch:
+    inputs:
+      ssh:
+        description: "SSH connection to Actions"
+        required: true
+        default: "false"
+        type: choice
+        options: [true, false]
+  schedule:
+    - cron: "30 0 1,16 * *"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+env:
+  REPO_URL: https://github.com/openwrt/openwrt
+  OPENWRT_REF: e1915674ab327a25a1dbe48644471a905c962085
+  TZ: Asia/Shanghai
+  DEVICE_PATH: openwrt/qualcommax/ipq50xx/xiaomi_redmi-ax5400
+  MAX_INITRAMFS_MIB: 36
+  MAX_SYSUPGRADE_MIB: 48
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    if: github.event_name != 'workflow_dispatch' || github.event.repository.owner.id == github.event.sender.id
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+
+    - name: Initialize environment
+      timeout-minutes: 35
+      env:
+        DEBIAN_FRONTEND: noninteractive
+      run: |
+        set -euo pipefail
+        APT_OPTS=(
+          -o Dpkg::Options::=--force-confdef
+          -o Dpkg::Options::=--force-confold
+          -o DPkg::Lock::Timeout=120
+          -o Acquire::Retries=3
+          -o Acquire::http::Timeout=30
+          -o Acquire::https::Timeout=30
+        )
+        timeout 300 sudo -E apt-get -qq update "${APT_OPTS[@]}"
+        mapfile -t packages < .github/openwrt-build-packages.txt
+        timeout 900 sudo -E apt-get -qq install -y --no-install-recommends "${APT_OPTS[@]}" "${packages[@]}"
+        sudo timedatectl set-timezone "$TZ"
+        sudo mkdir -p /workdir
+        sudo chown "$USER":"$GROUPS" /workdir
+
+    - name: Clone pinned OpenWrt
+      working-directory: /workdir
+      run: |
+        set -euo pipefail
+        git init openwrt
+        git -C openwrt remote add origin "$REPO_URL"
+        git -C openwrt fetch --depth=1 origin "$OPENWRT_REF"
+        git -C openwrt checkout --detach FETCH_HEAD
+        test "$(git -C openwrt rev-parse HEAD)" = "$OPENWRT_REF"
+        ln -s /workdir/openwrt "$GITHUB_WORKSPACE/openwrt-source"
+        echo "FILE_DATE=$(date +"%Y%m%d")" >> "$GITHUB_ENV"
+
+    - name: Restore compiler cache
+      uses: actions/cache@3edfce9056124e459a23f683a21433670d47daca
+      with:
+        path: ~/.ccache
+        key: openwrt-ccache-${{ runner.os }}-ax5400-${{ env.OPENWRT_REF }}-${{ hashFiles('openwrt/**') }}
+        restore-keys: |
+          openwrt-ccache-${{ runner.os }}-ax5400-
+
+    - name: Prepare feeds
+      run: |
+        set -euo pipefail
+        chmod +x "$DEVICE_PATH/diy/diy.sh"
+        cd openwrt-source
+        "$GITHUB_WORKSPACE/$DEVICE_PATH/diy/diy.sh"
+
+    - name: Update and install feeds
+      timeout-minutes: 85
+      run: |
+        set -euo pipefail
+        cd openwrt-source
+        mapfile -t feeds < <(awk '/^src-git(-full)?[[:space:]]/{print $2}' feeds.conf.default)
+        for feed in "${feeds[@]}"; do
+          echo "==> update $feed"
+          timeout 600 ./scripts/feeds update "$feed"
+        done
+        ./scripts/feeds install -a
+        for item in \
+          passwall_luci/luci-app-passwall \
+          passwall_packages/sing-box \
+          passwall_packages/chinadns-ng \
+          passwall_packages/geoview \
+          passwall_packages/v2ray-geodata; do
+          test -e "package/feeds/$item" || {
+            echo "Missing feed package: $item" >&2
+            exit 1
+          }
+        done
+
+    - name: Load and verify configuration
+      run: |
+        set -euo pipefail
+        cd openwrt-source
+        cp "$GITHUB_WORKSPACE/$DEVICE_PATH/config.seed" .config
+        make defconfig
+        grep -qx 'CONFIG_TARGET_qualcommax_ipq50xx_DEVICE_xiaomi_redmi-ax5400=y' .config
+        grep -qx 'CONFIG_PACKAGE_kmod-qca-nss-dp=y' .config
+        grep -qx 'CONFIG_PACKAGE_kmod-qca-ssdk=y' .config
+        ! grep -qx 'CONFIG_PACKAGE_kmod-qca-nss-drv=y' .config
+        ! grep -qx 'CONFIG_PACKAGE_kmod-qca-nss-ecm=y' .config
+        grep -qx 'CONFIG_PACKAGE_luci-app-passwall_INCLUDE_SingBox=y' .config
+        grep -qx '# CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Xray is not set' .config
+        if grep -Eq '^CONFIG_(DWMAC_IPQ5018|PACKAGE_kmod-dwmac-ipq5018)=y$' .config; then
+          echo 'DWMAC IPQ5018 was unexpectedly enabled' >&2
+          exit 1
+        fi
+        for package in kmod-ath11k-ahb kmod-ath11k-pci \
+                       ath11k-firmware-ipq5018 ath11k-firmware-qcn9074 \
+                       ipq-wifi-xiaomi_redmi-ax5400; do
+          grep -qx "CONFIG_PACKAGE_${package}=y" .config || {
+            echo "Required package not built in: $package" >&2
+            exit 1
+          }
+        done
+
+    - name: SSH connect to Actions
+      uses: P3TERX/ssh2actions@71006b93bff498b020448ac10964f8a5d0f9f32c
+      if: github.event.inputs.ssh == 'true'
+
+    - name: Download packages
+      timeout-minutes: 50
+      working-directory: ./openwrt-source
+      run: |
+        jobs=$(nproc)
+        [ "$jobs" -le 4 ] || jobs=4
+        if ! make download -j"$jobs"; then
+          find dl -size -1k -delete
+          make download -j1 V=s
+        fi
+        find dl -size -1k -delete
+
+    - name: Compile firmware
+      timeout-minutes: 270
+      working-directory: ./openwrt-source
+      run: |
+        jobs=$(( $(nproc) + 1 ))
+        if ! make -j"$jobs"; then
+          if ! make -j1 V=s > build-retry.log 2>&1; then
+            tail -n 300 build-retry.log
+            exit 1
+          fi
+        fi
+
+    - name: Validate and package firmware
+      run: |
+        set -euo pipefail
+        target="$GITHUB_WORKSPACE/openwrt-source/bin/targets/qualcommax/ipq50xx"
+        output="$GITHUB_WORKSPACE/out-openwrt"
+        mkdir -p "$output"
+        cd "$target"
+        initramfs=( *redmi-ax5400*initramfs-factory.ubi )
+        sysupgrade=( *redmi-ax5400*squashfs-sysupgrade.bin )
+        test -e "${initramfs[0]}" || { echo 'Missing initramfs-factory.ubi' >&2; exit 1; }
+        test -e "${sysupgrade[0]}" || { echo 'Missing squashfs-sysupgrade.bin' >&2; exit 1; }
+        initramfs_bytes=$(stat -c %s "${initramfs[0]}")
+        sysupgrade_bytes=$(stat -c %s "${sysupgrade[0]}")
+        initramfs_limit=$(( MAX_INITRAMFS_MIB * 1024 * 1024 ))
+        sysupgrade_limit=$(( MAX_SYSUPGRADE_MIB * 1024 * 1024 ))
+        [ "$initramfs_bytes" -le "$initramfs_limit" ] || {
+          echo "Unsafe initramfs size: $initramfs_bytes bytes (limit $initramfs_limit)" >&2
+          exit 1
+        }
+        [ "$sysupgrade_bytes" -le "$sysupgrade_limit" ] || {
+          echo "Unsafe sysupgrade size: $sysupgrade_bytes bytes (limit $sysupgrade_limit)" >&2
+          exit 1
+        }
+        member_prefix=$(tar -tf "${sysupgrade[0]}" | sed -n 's#/CONTROL$##p' | head -n1)
+        test -n "$member_prefix"
+        kernel_bytes=$(tar -xOf "${sysupgrade[0]}" "$member_prefix/kernel" | wc -c)
+        rootfs_bytes=$(tar -xOf "${sysupgrade[0]}" "$member_prefix/root" | wc -c)
+        [ "$kernel_bytes" -le $((36 * 1024 * 1024)) ] || { echo 'Kernel exceeds ubi_kernel partition' >&2; exit 1; }
+        [ "$rootfs_bytes" -le $((81 * 1024 * 1024)) ] || { echo 'Rootfs exceeds rootfs partition' >&2; exit 1; }
+        cp -- "${initramfs[@]}" "${sysupgrade[@]}" "$output/"
+        cd "$GITHUB_WORKSPACE/openwrt-source"
+        cp .config "$output/config.build"
+        {
+          printf 'openwrt %s\n' "$(git rev-parse HEAD)"
+          for feed in feeds/*; do
+            test -d "$feed/.git" && printf '%s %s\n' "$(basename "$feed")" "$(git -C "$feed" rev-parse HEAD)"
+          done
+          printf 'initramfs_bytes %s\n' "$initramfs_bytes"
+          printf 'sysupgrade_bytes %s\n' "$sysupgrade_bytes"
+          printf 'kernel_member_bytes %s\n' "$kernel_bytes"
+          printf 'rootfs_member_bytes %s\n' "$rootfs_bytes"
+        } > "$output/source-versions.txt"
+        cd "$output"
+        sha256sum -- * > sha256sums.txt
+        ls -lh
+
+    - name: Upload firmware to release
+      uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64
+      with:
+        tag_name: openwrt-e191-ax5400_${{ env.FILE_DATE }}_${{ github.run_number }}
+        files: out-openwrt/*
+        body: |
+          OpenWrt e1915674ab / Linux 6.12.89 for Xiaomi Redmi AX5400 (RA74)
+
+          Uses the verified working QCA NSS-DP + QCA-SSDK Ethernet stack, without full NSS driver/ECM.
+          Includes LuCI and PassWall with SingBox. Source and feed revisions are pinned.
+
+          WARNING: Test initramfs first. Do not sysupgrade until WAN, Wi-Fi, UBI layout and boot environment are verified on the device.
