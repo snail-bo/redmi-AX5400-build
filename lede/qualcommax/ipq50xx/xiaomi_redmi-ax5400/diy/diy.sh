@@ -11,17 +11,17 @@ pin_feed() {
   }
 }
 
-pin_feed packages 8509f551edb7beb4a6324afca4d84b2bea404b66
-pin_feed luci 1df16f1ef5845a9c2cacd5d6f1e0d2fe95cdad37
-pin_feed routing 4b9891b9136259f93294a424507ed24c5e8c1cbd
-pin_feed telephony 5d68d53c160a325ea9d03fce393e051573bcc736
-pin_feed video 644a66261288b4a95dbc6e46fe805d33cb9f71d9
+pin_feed packages bc0a5c06bcfcb7235bb93dbb5aa09e9b0e32b6f0
+pin_feed luci 98d8a72ea2f55755c4608ef913867ff1d841889b
+pin_feed routing 75994b736e2fa1d259ea4e3a6715893b501aa4ba
+pin_feed telephony d3bcb153813b1ff34b3dd0f1bf0dc913984f2921
+pin_feed helloworld 4efbf62d431e3ea235be69b8b8f8f537520beb13
 
 passwall_packages='https://github.com/Openwrt-Passwall/openwrt-passwall-packages.git^e73ad1c77a96fdaa498807ff7bc717dc92c349ea'
-passwall_luci='https://github.com/Openwrt-Passwall/openwrt-passwall.git^1fa80eab0c289d6547eaeaf4169a17b4eba28acf'
+passwall_luci='https://github.com/Openwrt-Passwall/openwrt-passwall.git^c0992fce505b8dcc2331470fe8db97f7d6de9020'
 
-# PassWall 必须排在 packages 前面，同名的 sing-box/geodata 才会选中此源。
-# 先移除旧条目，使脚本重复运行或遇到残缺配置时也不会产生重名 feed。
+# Put PassWall feeds first so their SingBox and geodata packages win any
+# same-name conflict with LEDE's regular feeds.
 sed -i -E '/^src-git(-full)? passwall_(packages|luci) /d' feeds.conf.default
 {
   echo "src-git passwall_packages $passwall_packages"
@@ -35,4 +35,4 @@ head -n 2 feeds.conf.default | grep -q '^src-git passwall_' || {
   exit 1
 }
 
-echo "==> ImmortalWrt feeds 已固定，PassWall 已置顶"
+echo "==> LEDE feeds 已固定，PassWall 已置顶"

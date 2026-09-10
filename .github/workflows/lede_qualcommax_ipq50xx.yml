@@ -1,12 +1,12 @@
-name: Build ImmortalWrt for Redmi AX5400
+name: Build LEDE for Redmi AX5400
 
 on:
   push:
     branches: [main]
     paths:
-      - ".github/workflows/immortalwrt_qualcommax_ipq50xx.yml"
+      - ".github/workflows/lede_qualcommax_ipq50xx.yml"
       - ".github/openwrt-build-packages.txt"
-      - "immortalwrt/**"
+      - "lede/**"
   workflow_dispatch:
     inputs:
       ssh:
@@ -26,15 +26,15 @@ permissions:
   contents: write
 
 env:
-  REPO_URL: https://github.com/immortalwrt/immortalwrt
-  IMMORTALWRT_REF: 8d9475a99f03784210ff158f9f27c83a9c93a735
+  REPO_URL: https://github.com/coolsnowwolf/lede
+  LEDE_REF: 8e6869b606dd62034c0a233bde6f7a0598eacac0
   TZ: Asia/Shanghai
-  DEVICE_PATH: immortalwrt/qualcommax/ipq50xx/xiaomi_redmi-ax5400
+  DEVICE_PATH: lede/qualcommax/ipq50xx/xiaomi_redmi-ax5400
 
 jobs:
   build:
     runs-on: ubuntu-24.04
-    timeout-minutes: 330
+    timeout-minutes: 360
     if: github.event_name != 'workflow_dispatch' || github.event.repository.owner.id == github.event.sender.id
 
     steps:
@@ -62,37 +62,37 @@ jobs:
         sudo mkdir -p /workdir
         sudo chown "$USER":"$GROUPS" /workdir
 
-    - name: Clone ImmortalWrt
+    - name: Clone LEDE
       working-directory: /workdir
       run: |
         set -euo pipefail
-        git init immortalwrt
-        git -C immortalwrt remote add origin "$REPO_URL"
-        git -C immortalwrt fetch --depth=1 origin "$IMMORTALWRT_REF"
-        git -C immortalwrt checkout --detach FETCH_HEAD
-        ln -s /workdir/immortalwrt "$GITHUB_WORKSPACE/immortalwrt-source"
+        git init lede
+        git -C lede remote add origin "$REPO_URL"
+        git -C lede fetch --depth=1 origin "$LEDE_REF"
+        git -C lede checkout --detach FETCH_HEAD
+        ln -s /workdir/lede "$GITHUB_WORKSPACE/lede-source"
         echo "FILE_DATE=$(date +"%Y%m%d")" >> "$GITHUB_ENV"
 
     - name: Restore compiler cache
       uses: actions/cache@3edfce9056124e459a23f683a21433670d47daca
       with:
         path: ~/.ccache
-        key: immortalwrt-ccache-${{ runner.os }}-ax5400-${{ env.IMMORTALWRT_REF }}-${{ hashFiles('immortalwrt/**') }}
+        key: lede-ccache-${{ runner.os }}-ax5400-${{ env.LEDE_REF }}-${{ hashFiles('lede/**') }}
         restore-keys: |
-          immortalwrt-ccache-${{ runner.os }}-ax5400-
+          lede-ccache-${{ runner.os }}-ax5400-
 
     - name: Prepare feeds
       run: |
         set -euo pipefail
         chmod +x "$DEVICE_PATH/diy/diy.sh"
-        cd immortalwrt-source
+        cd lede-source
         "$GITHUB_WORKSPACE/$DEVICE_PATH/diy/diy.sh"
 
     - name: Update feeds
-      timeout-minutes: 45
+      timeout-minutes: 50
       run: |
         set -euo pipefail
-        cd immortalwrt-source
+        cd lede-source
         mapfile -t feeds < <(awk '/^src-git(-full)?[[:space:]]/{print $2}' feeds.conf.default)
         for feed in "${feeds[@]}"; do
           echo "==> update $feed"
@@ -100,10 +100,10 @@ jobs:
         done
 
     - name: Install feeds
-      timeout-minutes: 30
+      timeout-minutes: 35
       run: |
         set -euo pipefail
-        cd immortalwrt-source
+        cd lede-source
         ./scripts/feeds install -a
         for item in \
           passwall_luci/luci-app-passwall \
@@ -111,22 +111,26 @@ jobs:
           passwall_packages/chinadns-ng \
           passwall_packages/geoview \
           passwall_packages/v2ray-geodata; do
-          test -e "package/feeds/$item" || { echo "feed 包缺失或链接悬空: $item" >&2; exit 1; }
+          test -e "package/feeds/$item" || {
+            echo "feed 包缺失或链接悬空: $item" >&2
+            exit 1
+          }
         done
 
     - name: Load configuration
       run: |
         set -euo pipefail
-        cd immortalwrt-source
+        cd lede-source
         cp "$GITHUB_WORKSPACE/$DEVICE_PATH/config.seed" .config
         make defconfig
         grep -qx 'CONFIG_TARGET_qualcommax_ipq50xx_DEVICE_xiaomi_redmi-ax5400=y' .config
         grep -qx 'CONFIG_PACKAGE_luci-app-passwall_INCLUDE_SingBox=y' .config
         grep -qx '# CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Xray is not set' .config
-        for package in kmod-ath11k-ahb kmod-ath11k-pci ath11k-firmware-ipq5018 \
+        for package in kmod-qca-nss-dp kmod-qca-ssdk kmod-ath11k-ahb \
+                       kmod-ath11k-pci ath11k-firmware-ipq5018 \
                        ath11k-firmware-qcn9074 ipq-wifi-xiaomi_redmi-ax5400; do
           grep -qx "CONFIG_PACKAGE_${package}=y" .config || {
-            echo "无线包没有内置: $package" >&2
+            echo "必需包没有内置: $package" >&2
             exit 1
           }
         done
@@ -136,8 +140,8 @@ jobs:
       if: github.event.inputs.ssh == 'true'
 
     - name: Download packages
-      timeout-minutes: 45
-      working-directory: ./immortalwrt-source
+      timeout-minutes: 50
+      working-directory: ./lede-source
       run: |
         download_jobs=$(nproc)
         if [ "$download_jobs" -gt 4 ]; then download_jobs=4; fi
@@ -148,8 +152,8 @@ jobs:
         find dl -size -1k -delete
 
     - name: Compile firmware
-      timeout-minutes: 250
-      working-directory: ./immortalwrt-source
+      timeout-minutes: 270
+      working-directory: ./lede-source
       run: |
         jobs=$(( $(nproc) + 1 ))
         if ! make -j"$jobs"; then
@@ -162,31 +166,32 @@ jobs:
     - name: Package firmware
       run: |
         set -euo pipefail
-        mkdir -p "$GITHUB_WORKSPACE/out-immortalwrt"
-        cd immortalwrt-source/bin/targets/qualcommax/ipq50xx
+        mkdir -p "$GITHUB_WORKSPACE/out-lede"
+        cd lede-source/bin/targets/qualcommax/ipq50xx
         initramfs=( *redmi-ax5400*initramfs-factory.ubi )
         sysupgrade=( *redmi-ax5400*squashfs-sysupgrade.bin )
         test -e "${initramfs[0]}" || { echo "缺少 initramfs-factory.ubi" >&2; exit 1; }
         test -e "${sysupgrade[0]}" || { echo "缺少 squashfs-sysupgrade.bin" >&2; exit 1; }
-        cp -- "${initramfs[@]}" "${sysupgrade[@]}" "$GITHUB_WORKSPACE/out-immortalwrt/"
-        cd "$GITHUB_WORKSPACE/immortalwrt-source"
-        cp .config "$GITHUB_WORKSPACE/out-immortalwrt/config.build"
+        cp -- "${initramfs[@]}" "${sysupgrade[@]}" "$GITHUB_WORKSPACE/out-lede/"
+        cd "$GITHUB_WORKSPACE/lede-source"
+        cp .config "$GITHUB_WORKSPACE/out-lede/config.build"
         {
-          printf 'immortalwrt %s\n' "$(git rev-parse HEAD)"
+          printf 'lede %s\n' "$(git rev-parse HEAD)"
           for feed in feeds/*; do
             test -d "$feed/.git" && printf '%s %s\n' "$(basename "$feed")" "$(git -C "$feed" rev-parse HEAD)"
           done
-        } > "$GITHUB_WORKSPACE/out-immortalwrt/source-versions.txt"
-        cd "$GITHUB_WORKSPACE/out-immortalwrt"
+        } > "$GITHUB_WORKSPACE/out-lede/source-versions.txt"
+        cd "$GITHUB_WORKSPACE/out-lede"
         sha256sum -- * > sha256sums.txt
         ls -lh
 
     - name: Upload firmware to release
       uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64
       with:
-        tag_name: immortalwrt-ax5400_${{ env.FILE_DATE }}_${{ github.run_number }}
-        files: out-immortalwrt/*
+        tag_name: lede-ax5400_${{ env.FILE_DATE }}_${{ github.run_number }}
+        files: out-lede/*
         body: |
-          ImmortalWrt qualcommax/ipq50xx —— Xiaomi Redmi AX5400（RA74）
+          Lean LEDE qualcommax/ipq50xx —— Xiaomi Redmi AX5400（RA74）
 
-          集成 PassWall，默认仅保留 SingBox。默认 LAN 地址为 192.168.1.1。
+          使用 QCA NSS-DP/SSDK 网络栈，集成 PassWall，默认仅保留 SingBox。
+          默认 LAN 地址为 192.168.1.1。
